@@ -687,6 +687,8 @@ try {
 $$('[data-src]').forEach(el => {
   const img = new Image();
   img.onload = () => { el.innerHTML = ''; el.appendChild(img); const lg = el.closest('.lg'); if (lg) $('#splash').classList.add(lg.classList.contains('l') ? 'ld-l' : 'ld-r'); };
+  let tried = false;
+  img.onerror = () => { if (!tried && /\.png$/i.test(el.dataset.src)) { tried = true; img.src = el.dataset.src.replace(/\.png$/i, '.jpg'); } };
   img.alt = ''; img.src = el.dataset.src;
 });
 
