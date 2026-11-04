@@ -1,0 +1,141 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      # Sorts everything in /images into www/mid and www/final by file name
+      # and writes www/data/manifest.json for the app.
+      - name: Sort images and build manifest
+        run: |
+          cat > gen.js <<'JS'
+          const fs = require('fs'), path = require('path');
+          const SUB = {phy:'Physics', math:'Math', logic:'Logic', eng:'English', geo:'Geography', psy:'Psychology'};
+          const RE = /^(\d{4}|other)\s+([a-z]+)\s+(mid|final)\s+(\d+)$/i;
+          const src = 'images', out = 'www';
+          const man = {mid:{}, final:{}};
+          let ok = 0; const bad = [];
+          for (const k of ['mid','final']) fs.mkdirSync(path.join(out, k), {recursive:true});
+          fs.mkdirSync(path.join(out, 'data'), {recursive:true});
+          for (const f of (fs.existsSync(src) ? fs.readdirSync(src) : [])) {
+            const ext = path.extname(f).toLowerCase();
+            if (!['.jpg','.jpeg','.png','.webp'].includes(ext)) continue;
+            const m = RE.exec(path.basename(f, path.extname(f)).trim());
+            if (!m || !SUB[m[2].toLowerCase()]) { bad.push(f); continue; }
+            const year = m[1].toLowerCase(), kind = m[3].toLowerCase(), subj = SUB[m[2].toLowerCase()], num = parseInt(m[4], 10);
+            const name = f.trim().replace(/\s+/g, '_').toLowerCase();
+            fs.copyFileSync(path.join(src, f), path.join(out, kind, name));
+            ((man[kind][subj] ||= {})[year] ||= {})['Part ' + num] = [kind + '/' + name];
+            ok++;
+          }
+          fs.writeFileSync(path.join(out, 'data', 'manifest.json'), JSON.stringify(man, null, 1));
+          console.log('Images listed: ' + ok);
+          if (bad.length) console.log('SKIPPED (wrong name):\n  ' + bad.join('\n  '));
+          JS
+          node gen.js
+
+      - name: Create Android project
+        run: |
+          npm init -y
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          npx cap init "Arbaminch Freshman Guide" com.kingquant.arbaminchguide --web-dir www
+          npx cap add android
+          npx cap sync android
+
+      # Turns www/logo3.png (or .jpg) into the phone's app icon and removes the default launch image
+      - name: Set app icon from logo3
+        run: |
+          pip install pillow
+          cat > icon.py <<'PY'
+          import glob, os
+          from PIL import Image, ImageDraw
+          res = 'android/app/src/main/res'
+          found = sorted(glob.glob('www/logo3.*'))
+          found = [f for f in found if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))]
+          if not found:
+              print('WARNING: www/logo3.png not found - default icon kept')
+              raise SystemExit
+          logo = Image.open(found[0]).convert('RGBA')
+          w, h = logo.size
+          side = min(w, h)
+          logo = logo.crop(((w - side) // 2, (h - side) // 2, (w - side) // 2 + side, (h - side) // 2 + side))
+          avg = logo.convert('RGB').resize((1, 1), Image.LANCZOS).getpixel((0, 0))
+          bg_hex = '#%02X%02X%02X' % avg
+          def mask(size, round_):
+              m = Image.new('L', (size * 4, size * 4), 0)
+              d = ImageDraw.Draw(m)
+              if round_:
+                  d.ellipse((0, 0, size * 4 - 1, size * 4 - 1), fill=255)
+              else:
+                  d.rounded_rectangle((0, 0, size * 4 - 1, size * 4 - 1), radius=int(size * 4 * 0.22), fill=255)
+              return m.resize((size, size), Image.LANCZOS)
+          def legacy(size, round_):
+              im = logo.resize((size, size), Image.LANCZOS)
+              im.putalpha(mask(size, round_))
+              return im
+          def fg(size):
+              canvas = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+              inner = int(size * 0.70)
+              canvas.paste(logo.resize((inner, inner), Image.LANCZOS), ((size - inner) // 2, (size - inner) // 2))
+              return canvas
+          for d, s in {'mdpi': 48, 'hdpi': 72, 'xhdpi': 96, 'xxhdpi': 144, 'xxxhdpi': 192}.items():
+              folder = f'{res}/mipmap-{d}'
+              os.makedirs(folder, exist_ok=True)
+              legacy(s, False).save(f'{folder}/ic_launcher.png')
+              legacy(s, True).save(f'{folder}/ic_launcher_round.png')
+              fg(int(s * 108 / 48)).save(f'{folder}/ic_launcher_fg.png')
+          os.makedirs(f'{res}/mipmap-anydpi-v26', exist_ok=True)
+          os.makedirs(f'{res}/values', exist_ok=True)
+          xml = '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/afg_icon_bg"/>\n    <foreground android:drawable="@mipmap/ic_launcher_fg"/>\n</adaptive-icon>\n'
+          for n in ('ic_launcher.xml', 'ic_launcher_round.xml'):
+              open(f'{res}/mipmap-anydpi-v26/{n}', 'w').write(xml)
+          open(f'{res}/values/afg_icon.xml', 'w').write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="afg_icon_bg">' + bg_hex + '</color>\n</resources>\n')
+          # plain launch image so the default Capacitor picture never flashes
+          for f in glob.glob(f'{res}/drawable*/splash.png'):
+              Image.new('RGB', (8, 8), (255, 255, 255)).save(f)
+          print('Icon built from', found[0], bg_hex)
+          PY
+          python3 icon.py
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Save APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk Arbaminch-Freshman-Guide.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Arbaminch-Freshman-Guide-APK
+          path: Arbaminch-Freshman-Guide.apk
+
+      - name: Publish release (easy download on phone)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          files: Arbaminch-Freshman-Guide.apk
