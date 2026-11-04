@@ -24,7 +24,7 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
+ 
 
       # Sorts everything in /images into www/mid and www/final by file name
       # and writes www/data/manifest.json for the app.
