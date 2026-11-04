@@ -1,0 +1,6 @@
+Put your 3 logo files in this folder, next to index.html:
+  logo1.png   (splash, left)
+  logo2.png   (splash, right)
+  logo3.png   (login badge and top of every screen)
+Optional icons: home.svg  info.svg  settings.svg
+You can delete this text file after you add the logos.

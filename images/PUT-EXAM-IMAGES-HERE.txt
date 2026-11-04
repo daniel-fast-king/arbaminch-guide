@@ -1,0 +1,6 @@
+Put ALL your exam images in this folder, flat, no sub-folders.
+Name format:  <year> <code> <mid|final> <number>.jpg
+Examples:     2015 phy mid 1.jpg     other math final 3.png
+Codes:        phy math logic eng geo psy
+Use "other" instead of the year when it is unknown.
+You can delete this text file after you add images (it is ignored anyway).
