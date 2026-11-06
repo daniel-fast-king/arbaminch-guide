@@ -24,7 +24,13 @@ jobs:
           distribution: temurin
           java-version: 17
 
- 
+      # Stops the build early with a clear message if the app files are missing
+      - name: Check app files
+        run: |
+          test -f www/index.html || { echo "ERROR: www/index.html not found. Put your HTML inside a folder named www"; exit 1; }
+          for f in logo1 logo2 logo3; do
+            ls www/$f.* >/dev/null 2>&1 || echo "WARNING: www/$f.* not found"
+          done
 
       # Sorts everything in /images into www/mid and www/final by file name
       # and writes www/data/manifest.json for the app.
@@ -56,13 +62,22 @@ jobs:
           JS
           node gen.js
 
+      # THE BACK BUTTON FIX: @capacitor/app lets the phone's back button reach your HTML,
+      # @capacitor/device is used by your app for the device id.
       - name: Create Android project
         run: |
           npm init -y
-          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/app@6 @capacitor/device@6
           npx cap init "Arbaminch Freshman Guide" com.kingquant.arbaminchguide --web-dir www
           npx cap add android
           npx cap sync android
+
+      # Fails the build if the plugins did not get into the Android project
+      - name: Verify plugins are installed
+        run: |
+          cat android/app/src/main/assets/capacitor.plugins.json
+          grep -q "@capacitor/app" android/app/src/main/assets/capacitor.plugins.json || { echo "ERROR: back button plugin missing"; exit 1; }
+          grep -q "@capacitor/device" android/app/src/main/assets/capacitor.plugins.json || { echo "ERROR: device plugin missing"; exit 1; }
 
       # Turns www/logo3.png (or .jpg) into the phone's app icon and removes the default launch image
       - name: Set app icon from logo3
