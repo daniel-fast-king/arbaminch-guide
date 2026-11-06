@@ -540,6 +540,20 @@ body{background:var(--outer)}
 .dcard p{color:var(--tsub)}
 .chk{background:var(--acc);border-color:var(--card);box-shadow:0 6px 0 var(--acc-e)}
 .chk svg{stroke:var(--on-acc)}
+
+/* ===== APK fixes: full-width (no side strips) + smoother animations ===== */
+html{background:var(--outer)}
+#app{max-width:none;width:100%;margin:0;box-shadow:none}
+@media (min-width:600px){
+  #auth .card,.tiles,.sgrid,.list,.banner,.hero{max-width:520px;margin-left:auto;margin-right:auto}
+}
+.shapes{filter:none!important}
+.sh>*,.emo{filter:none!important}
+.done{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+.view:not(.on):not(.leave) *,#splash.gone *,#splash.gone::before,#splash.gone::after,
+#auth:not(.reveal):not(.leaving) *{animation-play-state:paused!important}
+html.paused *,html.paused *::before,html.paused *::after{animation-play-state:paused!important}
+.view{will-change:opacity;backface-visibility:hidden}
 </style>
 </head>
 <body>
@@ -993,6 +1007,8 @@ document.addEventListener('click', e => {
 
 document.addEventListener('visibilitychange', () => {
   const v = document.visibilityState === 'visible';
+  document.documentElement.classList.toggle('paused', !v);
+  if (!v) { try { saveRoute(); } catch (e) {} }
   logEvent(v ? 'app_visible' : 'app_hidden');
   if (!v) syncNow();
 });
@@ -1080,10 +1096,14 @@ splash.addEventListener('click', () => { clearTimeout(splashTimer); reveal(); })
 
 /* ---------- parallax on the floating shapes ---------- */
 const shapes = $('#shapes');
+let parRaf = 0;
 function par(e) {
-  const r = appEl.getBoundingClientRect();
-  shapes.style.setProperty('--px', ((e.clientX - r.left) / r.width * 2 - 1).toFixed(2));
-  shapes.style.setProperty('--py', ((e.clientY - r.top) / r.height * 2 - 1).toFixed(2));
+  if (parRaf) return; const cx = e.clientX, cy = e.clientY;
+  parRaf = requestAnimationFrame(() => {
+    parRaf = 0; const r = appEl.getBoundingClientRect();
+    shapes.style.setProperty('--px', ((cx - r.left) / r.width * 2 - 1).toFixed(2));
+    shapes.style.setProperty('--py', ((cy - r.top) / r.height * 2 - 1).toFixed(2));
+  });
 }
 auth.addEventListener('pointermove', par);
 
@@ -1230,6 +1250,7 @@ function render(id) {
   $('#nav').classList.toggle('on', inApp && id !== 'viewer');
   const tab = TAB_OF[id] || id;
   $$('.nb').forEach(b => b.classList.toggle('act', b.dataset.go === tab));
+  saveRoute();
 }
 function push(id) {
   if (stack[stack.length - 1] === id) return;
@@ -1287,7 +1308,7 @@ try {
   const A = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.App;
   A && A.addListener && A.addListener('backButton', () => {
     if (inApp && stack.length > 1) navBack();
-    else if (A.exitApp) A.exitApp();
+    else if (A.exitApp) { try { localStorage.removeItem('afg_route'); } catch (e) {} A.exitApp(); }
   });
 } catch (e) {}
 
@@ -1417,7 +1438,7 @@ function loadAround(i) {
 function vUpdate() {
   $('#vc').textContent = `${vI + 1} / ${vN}`;
   if (vPN[vI]) $('#vT').textContent = [ctx.subject, dn(ctx.year || ''), vPN[vI]].filter(Boolean).join(' · ');
-  loadAround(vI);
+  loadAround(vI); saveRoute();
   [...vs.children].forEach((s, j) => { const im = s.firstElementChild; if (j !== vI && im && im._z && im._z.s !== 1) { im._z = {s: 1, x: 0, y: 0}; im.style.transform = ''; } });
   const ci = curImg(); if (ci) zApply(ci);
 }
@@ -1540,6 +1561,7 @@ document.addEventListener('authsuccess', enterHome);
 /* app opened and this phone already has an account (online OR offline): no login page, ever */
 function enterHomeDirect() {
   startApp();
+  if (window.__restoreRoute) { const r = window.__restoreRoute; window.__restoreRoute = null; restoreRoute(r); }
   splash.style.transition = 'opacity .45s ease'; splash.style.opacity = '0';
   setTimeout(() => splash.classList.add('gone'), 480);
   syncNow();
@@ -1548,7 +1570,7 @@ function enterHomeDirect() {
 $('#logout').onclick = async () => {
   logEvent('logout', 'logout');
   try { await Promise.race([syncNow(), sleep(3000)]); } catch (e) {}
-  SES = null; saveSes(); authDead = false;
+  SES = null; saveSes(); authDead = false; try { localStorage.removeItem('afg_route'); } catch (e) {}
   inApp = false; stack = []; cur = null; scr = 'auth'; screenSince = performance.now();
   ['section', 'subject', 'year', 'part'].forEach(k => { ctx[k] = ''; });
   phone.value = ''; pass.value = ''; fp.classList.remove('valid');
@@ -1558,6 +1580,55 @@ $('#logout').onclick = async () => {
   setMode('login'); auth.classList.add('reveal');
   setTimeout(() => { if (!inApp) VIEWS.forEach(v => $('#' + v).classList.remove('on')); }, 850);
 };
+
+
+/* =====================================================
+   KEEP PLACE AFTER SCREEN LOCK
+   Remembers the screen. If Android closed the app in the background (screen lock, low memory)
+   and the user comes back from Recents, it reopens exactly where they were.
+   Swiping the app away from Recents (or leaving with Back at home) starts fresh.
+   ===================================================== */
+let restoring = false;
+function saveRoute() {
+  if (!inApp || restoring || !stack.length) return;
+  try { localStorage.setItem('afg_route', JSON.stringify({t: Date.now(), stack: stack.slice(), ctx: Object.assign({}, ctx), vI})); } catch (e) {}
+}
+function readRoute() { try { return JSON.parse(localStorage.getItem('afg_route') || 'null'); } catch (e) { return null; } }
+async function restoreRoute(r) {
+  restoring = true;
+  const fake = i => ({target: {closest: () => ({dataset: {i: String(i)}})}});
+  try {
+    const c = r.ctx || {};
+    for (let k = 1; k < r.stack.length; k++) {
+      const id = r.stack[k], prev = r.stack[k - 1];
+      if (id === 'subjects') { if (!SECTIONS[c.section]) break; openSubjects(c.section); }
+      else if (id === 'info' || id === 'settings') push(id);
+      else if (id === 'years' || (id === 'viewer' && prev === 'subjects')) {
+        const i = SUBJECTS.findIndex(x => x[0] === c.subject); if (i < 0) break; await $('#subL').onclick(fake(i));
+      } else if (id === 'parts' || (id === 'viewer' && prev === 'years')) {
+        const i = YEARS.findIndex(y => y.name === c.year); if (i < 0) break; $('#yrL').onclick(fake(i));
+      } else if (id === 'viewer' && prev === 'parts') {
+        const i = PARTS.findIndex(p => p.name === c.part); if (i < 0) break; $('#ptL').onclick(fake(i));
+      }
+      if (stack[stack.length - 1] !== id) break;
+    }
+    if (cur === 'viewer' && r.vI > 0) setTimeout(() => { vI = Math.min(vN - 1, r.vI); vs.scrollLeft = vI * (vs.clientWidth || 0); vUpdate(); }, 80);
+  } catch (e) {}
+  restoring = false; saveRoute();
+}
+/* the splash is skipped when we are restoring */
+(async function bootRestore() {
+  if (!SES) return;
+  const r = readRoute(); if (!r || !r.stack || r.stack.length < 2) return;
+  let native = window.AFGNative;
+  for (let n = 0; !native && n < 14; n++) { await sleep(50); native = window.AFGNative; }
+  let ok;
+  if (native) { try { ok = native.restored(); } catch (e) { ok = false; } }
+  else ok = Date.now() - (r.t || 0) < 10 * 60 * 1000;      /* no native flag: only a quick return */
+  if (!ok) { try { localStorage.removeItem('afg_route'); } catch (e) {} return; }
+  window.__restoreRoute = r;
+  clearTimeout(splashTimer); reveal();
+})();
 
 /* handy for testing from the browser console */
 window.__afg = {syncNow, queueLength: () => Q.length, configured: CONFIGURED, stack: () => stack.slice()};
