@@ -72,6 +72,32 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      # Lets the app know if Android restored it (screen lock / low memory) or it was a fresh start.
+      # Restored = reopen on the same screen. Swiped away from Recents = start from the beginning.
+      - name: Add restore flag to MainActivity
+        run: |
+          F=android/app/src/main/java/com/kingquant/arbaminchguide/MainActivity.java
+          test -f "$F" || { echo "ERROR: MainActivity.java not found"; exit 1; }
+          cat > "$F" <<'JAVA'
+          package com.kingquant.arbaminchguide;
+
+          import android.os.Bundle;
+          import android.webkit.JavascriptInterface;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  final boolean restored = savedInstanceState != null;
+                  getBridge().getWebView().addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public boolean restored() { return restored; }
+                  }, "AFGNative");
+              }
+          }
+          JAVA
+
       # Fails the build if the plugins did not get into the Android project
       - name: Verify plugins are installed
         run: |
